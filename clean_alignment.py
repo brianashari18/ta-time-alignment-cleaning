@@ -3,7 +3,7 @@ Time Alignment CSV Cleaner
 ==========================
 Cleans one or more Sonic Visualizer time-alignment CSV exports.
 
-Input format  : start_time, seq_order
+Input format  : [Kolom 1: waktu/start_time], [Kolom 2: bebas/diabaikan]
 Output format : track_id (artist-track), seq_order, start_time, end_time
 
 Filename convention : artist-track.csv  (artist = part before the first '-')
@@ -49,35 +49,36 @@ def artist_from_filename(filepath: str) -> str:
     return stem.split("-")[0]
 
 
-def parse_seq_order(raw: str) -> int | str:
+def clean_rows(raw_rows: list[list]) -> list[dict]:
     """
-    Convert seq_order value to int when possible, otherwise keep as string.
-    'New Point' → will be re-numbered sequentially (see clean_rows).
-    Numeric strings → int.
-    """
-    stripped = raw.strip()
-    try:
-        return int(stripped)
-    except ValueError:
-        return stripped  # e.g. 'New Point'
-
-
-def clean_rows(raw_rows: list[dict]) -> list[dict]:
-    """
-    Re-numbers every row sequentially (1-based) regardless of whether
-    seq_order was an integer or 'New Point', then computes end_time.
-
-    end_time of row N  = start_time of row N+1
-    end_time of last row = None  (blank cell in the output)
+    Extracts start_time from the first column, ignores headers, 
+    generates a clean 1-based seq_order, and computes end_time.
     """
     cleaned = []
-    for idx, row in enumerate(raw_rows, start=1):
+    valid_start_times = []
+
+    # 1. Ambil data waktu dari kolom pertama (index 0)
+    for row in raw_rows:
+        # Skip baris kosong
+        if not row or not row[0].strip():
+            continue
+        
+        try:
+            # Pastikan kolom pertama bisa diubah jadi angka (float)
+            start_time = float(row[0].strip())
+            valid_start_times.append(start_time)
+        except ValueError:
+            # Kalau gagal (misal isinya teks header "Start"), abaikan baris ini
+            continue
+
+    # 2. Buat seq_order baru dan susun datanya
+    for idx, start_time in enumerate(valid_start_times, start=1):
         cleaned.append({
             "seq_order": idx,
-            "start_time": float(row["start_time"].strip()),
+            "start_time": start_time,
         })
 
-    # compute end_time
+    # 3. Hitung end_time
     for i, row in enumerate(cleaned):
         if i + 1 < len(cleaned):
             row["end_time"] = cleaned[i + 1]["start_time"]
@@ -97,9 +98,8 @@ def process_file(input_path: str, output_base_dir: str) -> str:
 
     # ── read ──────────────────────────────────────────────────────────────────
     with open(input_path, newline="", encoding="utf-8-sig") as fh:
-        reader = csv.DictReader(fh)
-        # Normalise header names (strip spaces)
-        reader.fieldnames = [f.strip() for f in reader.fieldnames]
+        # Gunakan csv.reader biasa, bukan DictReader
+        reader = csv.reader(fh)
         raw_rows = list(reader)
 
     if not raw_rows:
@@ -108,6 +108,10 @@ def process_file(input_path: str, output_base_dir: str) -> str:
 
     # ── clean ─────────────────────────────────────────────────────────────────
     cleaned = clean_rows(raw_rows)
+
+    if not cleaned:
+        print(f"  [SKIP] {input_path} — no valid time data found.")
+        return ""
 
     # ── write ─────────────────────────────────────────────────────────────────
     output_dir = os.path.join(output_base_dir, artist)
